@@ -19,30 +19,31 @@ th{background:#ebe3d3;padding:.4rem;font-size:.85rem;position:sticky;top:0}td{pa
 <body class="p-3 md:p-5">
 <header class="flex flex-wrap items-center gap-2 mb-4">
   <h1 class="text-xl font-bold mr-2">🌿 班級 AI 評語微調與學期記錄助手</h1>
-  <span id="tabs"></span><span id="cloud" class="text-xs text-stone-500 ml-1"></span>
+  <span id="tabs"></span><span id="cloud" class="text-xs text-stone-500 ml-1">💾 本機安全儲存模式</span>
   <div class="ml-auto flex flex-wrap gap-2">
-    <button class="btn blue" onclick="A.exp()">⬇ 匯出備份</button>
-    <label class="btn blue cursor-pointer">⬆ 匯入<input type="file" accept=".json" class="hidden" onchange="A.imp(this)"></label>
+    <button class="btn blue" onclick="A.exp()">⬇ 匯出備份 (JSON)</button>
+    <label class="btn blue cursor-pointer">⬆ 匯入備份<input type="file" accept=".json" class="hidden" onchange="A.imp(this)"></label>
     <button class="btn alt" onclick="A.arch()">🎓 畢業封存</button>
-    <button class="btn blue" id="lg" onclick="A.login()">🔐 Google 登入</button>
-    <button class="btn gray" onclick="A.cfg(true)">⚙ 設定</button>
+    <button class="btn gray" onclick="A.cfg(true)">⚙ 設定 API Key</button>
   </div>
 </header>
 <main id="app"></main>
 
 <div id="modal" class="hidden fixed inset-0 bg-black/30 flex items-center justify-center p-3 z-40">
-  <div class="card w-full max-w-2xl max-h-[92vh] overflow-auto space-y-2">
-    <h2 class="font-bold text-lg">⚙ 設定（皆儲存於本機 LocalStorage）</h2>
-    <label class="text-sm">Gemini API Key<input id="c_key" type="password" class="inp"></label>
-    <label class="text-sm">Gemini 模型名稱<input id="c_model" class="inp" placeholder="gemini-2.5-flash"></label>
-    <label class="text-sm">firebaseConfig（貼上 Firebase 控制台的 { apiKey:..., projectId:... } 物件）<textarea id="c_fb" rows="6" class="inp font-mono"></textarea></label>
-    <label class="text-sm">學生名單（每行一位，依座號 1~N；保留原有資料依座號對應）<textarea id="c_roster" rows="8" class="inp"></textarea></label>
-    <div class="flex gap-2 justify-end"><button class="btn gray" onclick="A.cfg(false)">取消</button><button class="btn" onclick="A.saveCfg()">儲存設定</button></div>
+  <div class="card w-full max-w-lg max-h-[92vh] overflow-auto space-y-3">
+    <h2 class="font-bold text-lg">⚙ 設定</h2>
+    <label class="text-sm block">Gemini API Key<input id="c_key" type="password" class="inp mt-1" placeholder="請貼上您的 API Key"></label>
+    <label class="text-sm block">Gemini 模型名稱<input id="c_model" class="inp mt-1" placeholder="gemini-2.5-flash"></label>
+    <label class="text-sm block">學生名單（每行一位，依座號 1~N）<textarea id="c_roster" rows="8" class="inp mt-1" placeholder="例如：
+黃楷翔
+王小明
+李小華"></textarea></label>
+    <div class="flex gap-2 justify-end pt-2"><button class="btn gray" onclick="A.cfg(false)">取消</button><button class="btn" onclick="A.saveCfg()">儲存設定</button></div>
   </div>
 </div>
 <div id="toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-stone-700 text-white px-4 py-2 rounded-xl text-sm hidden z-50"></div>
 
-<script type="module">
+<script>
 const F=[['g5u','五上期末評語'],['c5','五年級春節卡片'],['g5d','五下期末評語'],['g6u','六上期末評語'],['c6','六年級春節卡片'],['g6d','六下期末評語']];
 const T=[...F,['grad','六年級畢業卡片']];
 const L=k=>T.find(x=>x[0]===k)[1];
@@ -53,43 +54,15 @@ const DEF={
  '祝福金句':{color:'#d6dfe8',list:['願你帶著自信前行','相信自己閃閃發光','新年平安喜樂','畢業快樂前程似錦','謝謝你陪我一年']}};
 let S=JSON.parse(localStorage.getItem('cls_data')||'null')||{students:[],styles:[],tags:DEF,updated:0};
 let C=JSON.parse(localStorage.getItem('cls_cfg')||'{}');
-let view='one',cur=0,tgt='g6d',draft='',editT='',extraT='',edit=false,busy=false,bd={},kw={},cloud=null;
+let view='one',cur=0,tgt='g6d',draft='',editT='',extraT='',edit=false,busy=false,bd={},kw={};
 const $=id=>document.getElementById(id);
-const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&','<':'<','>':'>','"':'"'}[c]));
 const toast=(m,ms=2200)=>{const t=$('toast');t.textContent=m;t.classList.remove('hidden');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.add('hidden'),ms)};
 
-// ---------- 儲存與雲端 ----------
-function save(){S.updated=Date.now();localStorage.setItem('cls_data',JSON.stringify(S));
- if(cloud)cloud.set(cloud.ref,{data:JSON.stringify(S),updated:S.updated}).then(()=>$('cloud').textContent='☁️ 已同步').catch(e=>{$('cloud').textContent='☁️ 同步失敗';toast('雲端寫入失敗：'+e.message,4000)});}
-let au=null,unsubA=null,unsubS=null;
-async function initCloud(){
- $('cloud').textContent='💻 僅本機儲存';cloud=null;$('lg').textContent='🔐 Google 登入';
- unsubA&&unsubA();unsubS&&unsubS();au=null;
- if(!C.fb)return;
- try{
-  const cfg=new Function('return '+C.fb)();
-  const {initializeApp,getApps}=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
-  const fs=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-  const m=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
-  const app=getApps().length?getApps()[0]:initializeApp(cfg);
-  const db=fs.getFirestore(app),auth=m.getAuth(app);au={auth,m};
-  unsubA=m.onAuthStateChanged(auth,u=>{
-   unsubS&&unsubS();cloud=null;
-   if(!u){$('cloud').textContent='🔒 未登入（僅本機儲存）';$('lg').textContent='🔐 Google 登入';return}
-   $('lg').textContent='登出 '+(u.email||'');
-   const ref=fs.doc(db,'users',u.uid,'data','main');cloud={ref,set:fs.setDoc};
-   unsubS=fs.onSnapshot(ref,snap=>{
-    if(!snap.exists()){if(S.students.length)save();return}
-    const d=snap.data();$('cloud').textContent='☁️ 已連線（'+(u.email||'')+'）';
-    if(!snap.metadata.hasPendingWrites&&d.updated>S.updated&&!busy){S=JSON.parse(d.data);localStorage.setItem('cls_data',d.data);render()}
-   },e=>{$('cloud').textContent='☁️ 連線錯誤';toast(e.message,4000)});
-  });
- }catch(e){$('cloud').textContent='☁️ 設定有誤';toast('firebaseConfig 解析失敗：'+e.message,4000)}
-}
+function save(){S.updated=Date.now();localStorage.setItem('cls_data',JSON.stringify(S));toast('💾 已自動儲存至本機')}
 
-// ---------- Gemini ----------
 async function gem(p){
- if(!C.key)throw new Error('請先在「設定」輸入 Gemini API Key');
+ if(!C.key)throw new Error('請先點右上角「⚙ 設定 API Key」填入金鑰');
  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${C.model||'gemini-2.5-flash'}:generateContent?key=${encodeURIComponent(C.key)}`,
   {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}],generationConfig:{temperature:.85}})});
  const j=await r.json();if(j.error)throw new Error(j.error.message);
@@ -107,7 +80,6 @@ function prompt(s,k,words){
 }
 function learn(text,k){if(!S.styles.some(x=>x.text===text))S.styles.push({t:L(k),text});S.styles=S.styles.slice(-20)}
 
-// ---------- 畫面 ----------
 function tagsHTML(){
  return Object.entries(S.tags).map(([c,v])=>`<div class="mt-1"><span class="text-xs text-stone-500">${esc(c)}</span><br>`+
   v.list.map((t,i)=>`<span class="chip" style="background:${v.color}" onclick="A.tag('${esc(c)}',${i})">${esc(t)}${edit?`<b onclick="event.stopPropagation();A.del('${esc(c)}',${i})"> ×</b>`:''}</span>`).join('')+`</div>`).join('')+
@@ -118,7 +90,7 @@ const tgtSel=()=>`<select class="inp" onchange="A.tgt(this.value)">${T.map(([k,l
 
 function render(){
  $('tabs').innerHTML=[['one','👤 單人模式'],['batch','📋 全班批量總表']].map(([k,l])=>`<span class="tab ${view===k?'on':''}" onclick="A.view('${k}')">${l}</span>`).join(' ');
- if(!S.students.length){$('app').innerHTML=`<div class="card text-center py-10">還沒有學生名單。請按右上角「⚙ 設定」貼上名單（每行一位）。</div>`;return}
+ if(!S.students.length){$('app').innerHTML=`<div class="card text-center py-10">還沒有學生名單。請點擊右上角「⚙ 設定 API Key」貼上學生名單與 API Key 開始使用！</div>`;return}
  if(cur>=S.students.length)cur=0;
  view==='one'?renderOne():renderBatch();
 }
@@ -137,7 +109,7 @@ function renderOne(){
  <section class="card space-y-2"><h2 class="font-bold">③ 編輯與存檔：${L(tgt)}</h2>
   <textarea id="edit" rows="14" class="inp" oninput="editT=this.value;$('cnt').textContent=this.value.length">${esc(editT)}</textarea>
   <div class="text-xs text-stone-500"><span id="cnt">${editT.length}</span> 字</div>
-  <button class="btn alt w-full" onclick="A.saveOne()">💾 確認存檔 &amp; 訓練 AI</button></section></div>`;
+  <button class="btn alt w-full" onclick="A.saveOne()">💾 確認存檔 & 訓練 AI</button></section></div>`;
 }
 function renderBatch(){
  $('app').innerHTML=`<div class="card"><div class="flex flex-wrap gap-2 items-center mb-3"><span class="font-bold">目標欄位</span><div class="w-52">${tgtSel()}</div>
@@ -151,11 +123,8 @@ function renderBatch(){
  </tbody></table></div></div>`;
 }
 
-// ---------- 動作 ----------
-const A=window.A={
+const A={
  view(v){view=v;render()},
- async login(){if(!au)return toast('請先在「設定」貼上 firebaseConfig');
-  try{au.auth.currentUser?await au.m.signOut(au.auth):await au.m.signInWithPopup(au.auth,new au.m.GoogleAuthProvider())}catch(e){toast('登入失敗：'+e.message,5000)}},
  pick(i){cur=i;draft='';editT=S.students[i].fields[tgt]||'';render()},
  tgt(k){tgt=k;draft='';bd={};editT=S.students[cur]?.fields[k]||'';render()},
  tag(c,i){const t=S.tags[c].list[i];extraT+=(extraT?'、':'')+t;$('extra').value=extraT},
@@ -185,14 +154,14 @@ const A=window.A={
   let n=0;S.students.forEach((s,i)=>{const t=(bd[i]||'').trim();if(t){s.fields[tgt]=t;learn(t,tgt);n++}});
   save();toast(`✅ 已存入 ${n} 位學生的「${L(tgt)}」`)},
  cfg(show){
-  if(show){$('c_key').value=C.key||'';$('c_model').value=C.model||'';$('c_fb').value=C.fb||'';$('c_roster').value=S.students.map(s=>s.name).join('\n')}
+  if(show){$('c_key').value=C.key||'';$('c_model').value=C.model||'gemini-2.5-flash';$('c_roster').value=S.students.map(s=>s.name).join('\n')}
   $('modal').classList.toggle('hidden',!show)},
  saveCfg(){
-  C={key:$('c_key').value.trim(),model:$('c_model').value.trim(),fb:$('c_fb').value.trim()};
+  C={key:$('c_key').value.trim(),model:$('c_model').value.trim()||'gemini-2.5-flash'};
   localStorage.setItem('cls_cfg',JSON.stringify(C));
   const names=$('c_roster').value.split('\n').map(x=>x.trim()).filter(Boolean);
   S.students=names.map((n,i)=>({no:i+1,name:n,fields:S.students[i]?.fields||{}}));
-  bd={};save();A.cfg(false);render();initCloud();toast('設定已儲存')},
+  bd={};save();A.cfg(false);render();toast('設定已儲存')},
  exp(){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,1)],{type:'application/json'}));
   a.download=`班級評語備份_${new Date().toISOString().slice(0,10)}.json`;a.click()},
@@ -204,6 +173,7 @@ const A=window.A={
   if(!confirm('畢業封存：將先下載完整備份，再清空所有學生資料（拼圖庫與風格範本會保留）。確定？'))return;
   A.exp();S.students=[];bd={};kw={};draft=editT='';save();render();toast('已封存並清空，請到「設定」貼上新名單')}
 };
-render();initCloud();
+render();
+if(!C.key) A.cfg(true);
 </script>
 </body></html>
